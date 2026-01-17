@@ -2,10 +2,9 @@
 Code generator - creates actual files from AppSpecification
 """
 
-import os
 from pathlib import Path
-from typing import Dict, Any, List
-from agent import AppSpecification, DatabaseModel, Route, ModelField
+from typing import List
+from agent import AppSpecification, DatabaseModel, Route
 from templates import (
     get_main_py_template,
     get_models_py_template,

@@ -4,7 +4,6 @@ Core autonomous agent using PydanticAI tools for filesystem interaction.
 
 import os
 import asyncio
-import subprocess
 import uuid
 from typing import Optional
 from dataclasses import dataclass
@@ -46,18 +45,16 @@ CRITICAL RULES:
 - FORM INPUTS: Use `Form(...)` parameters in your routes for POST requests. DO NOT try to use SQLAlchemy models as Pydantic request bodies.
 - NO NEW FOLDERS: Do NOT create a subfolder for the app (e.g., `apps/todo/todo_app`). Put `main.py` directly in the base path provided.
 - SCOPE: Build the simplest possible version (MVP). Do NOT add User Authentication unless explicitly asked.
+- DB LINKING: You MUST import Base from database.py into models.py (do not create a new Base).
 - COMPLETE: Ensure `init_db()` is called on startup to create tables.
 
 If you encounter an error (e.g., 'Address already in use'), ignore it and focus on ensuring the CODE in the files is correct and complete.
 """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "mistral-small-latest"):
-        self.api_key = api_key or os.getenv("MISTRAL_API_KEY")
-        if not self.api_key:
-            raise ValueError("MISTRAL_API_KEY not set")
-            
+    def __init__(self, model_str: str = "mistral:mistral-small-latest"):
+        """Initialize agent with a model string like 'openai:gpt-4o'"""
         self.agent = Agent(
-            f'mistral:{model}',
+            model_str,
             deps_type=AgentDeps,
             system_prompt=self.SYSTEM_PROMPT,
         )

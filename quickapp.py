@@ -8,7 +8,6 @@ import asyncio
 import os
 import sys
 import shutil
-from pathlib import Path
 from dotenv import load_dotenv
 
 from agent import CodeGenAgent
@@ -51,15 +50,8 @@ class QuickAppCLI:
     def initialize_agent(self):
         """Initialize the AI agent"""
         try:
-            api_key = os.getenv("MISTRAL_API_KEY")
-            if not api_key:
-                print_error("MISTRAL_API_KEY not found in environment variables")
-                print_info("Please set your Mistral API key:")
-                print_info("  export MISTRAL_API_KEY='your-key-here'")
-                sys.exit(1)
-            
-            model = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
-            self.agent = CodeGenAgent(api_key=api_key, model=model)
+            model = os.getenv("QUICKAPP_MODEL", "mistral:mistral-small-latest")
+            self.agent = CodeGenAgent(model_str=model)
             
             print_success(f"Initialized agent with model: {model}")
             
