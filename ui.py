@@ -39,9 +39,12 @@ class Spinner:
     
     def _animate(self):
         """Animation loop"""
+        start_time = time.time()
         while self.running:
             frame = self.FRAMES[self._frame_index % len(self.FRAMES)]
-            sys.stdout.write(f'\r{frame} {self.message}...')
+            # Add elapsed time to dynamic appearance
+            elapsed = int(time.time() - start_time)
+            sys.stdout.write(f'\r{frame} {self.message} ({elapsed}s)...')
             sys.stdout.flush()
             self._frame_index += 1
             time.sleep(0.1)

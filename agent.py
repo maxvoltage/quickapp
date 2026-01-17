@@ -3,13 +3,11 @@ Core autonomous agent using PydanticAI tools for filesystem interaction.
 """
 
 import os
+import asyncio
 import subprocess
-import shlex
-from typing import Optional, List, Dict
+from typing import Optional
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.mistral import MistralModel
 
 
 @dataclass
@@ -25,28 +23,31 @@ class CodeGenAgent:
 Your goal is to build a functional, beautiful Web Application (not just a JSON API) in the provided directory.
 
 WORKFLOW:
-1. EXPLORE: Check the directory.
+1. EXPLORE: Check the directory. If files exist, you are MODIFYING an existing app. Do not overwrite unless asked.
 2. PLAN: Write out the DB schema and the UI pages needed.
 3. BUILD:
-   - Use `make_directory` to create folders like `static/` or `templates/` before using them.
+   - Run `uv init --app --no-workspace` in the app directory to create a standalone `pyproject.toml`.
+   - Use `uv add fastapi uvicorn sqlalchemy jinja2 python-multipart` (and any others needed) to manage dependencies via `pyproject.toml`.
+   - Use `make_directory` to create folders like `static/` or `templates/`.
    - `models.py`: SQLAlchemy models.
    - `database.py`: SQLite connection and SessionLocal setup.
    - `templates/`: Jinja2 HTML templates. Use Tailwind CSS v4.
-   - `main.py`: FastAPI routes that return `Jinja2Templates.TemplateResponse`.
+   - `main.py`: FastAPI routes that return `Jinja2Templates.TemplateResponse`. THIS MUST BE IN THE ROOT of the app directory.
 4. VERIFY: Run `python -m py_compile main.py` or similar to check for syntax errors.
 
 CRITICAL RULES:
+- DEPENDENCIES: Do NOT use `requirements.txt`. Use `uv add` commands to install dependencies into the app's `pyproject.toml`.
 - WEB APP, NOT API: Your routes MUST return HTML using templates.
 - TEMPLATES: Use Jinja2 syntax (e.g., `{% if ... %}`, `{{ variable }}`). DO NOT use Mako/Perl syntax (e.g., `% if ...`).
-- FORM INPUTS: Use `Form(...)` parameters in your routes for POST requests. DO NOT try to use SQLAlchemy models as Pydantic request bodies (this causes crashes).
-- CONTEXT ISOLATION: If the user asks for a NEW application (e.g., you built a Joke app and now they ask for a Todo app), you MUST start from scratch mentally. Do not mix models, routes, or logic from the previous application. Each app is its own isolated workspace.
-- SCOPE: Build the simplest possible version (MVP). Do NOT add User Authentication, Login, or complex relationships unless explicitly asked. Assume a single-user environment.
+- FORM INPUTS: Use `Form(...)` parameters in your routes for POST requests. DO NOT try to use SQLAlchemy models as Pydantic request bodies.
+- NO NEW FOLDERS: Do NOT create a subfolder for the app (e.g., `apps/todo/todo_app`). Put `main.py` directly in the base path provided.
+- SCOPE: Build the simplest possible version (MVP). Do NOT add User Authentication unless explicitly asked.
 - COMPLETE: Ensure `init_db()` is called on startup to create tables.
 
 If you encounter an error (e.g., 'Address already in use'), ignore it and focus on ensuring the CODE in the files is correct and complete.
 """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "mistral-large-latest"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "mistral-small-latest"):
         self.api_key = api_key or os.getenv("MISTRAL_API_KEY")
         if not self.api_key:
             raise ValueError("MISTRAL_API_KEY not set")
@@ -61,8 +62,22 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         self.history = []
         self.total_usage = {"input": 0, "output": 0}
         
+        # Logging callback
+        self.log_callback = None
+        
         # Register tools
         self._register_tools()
+
+    def set_log_callback(self, callback):
+        """Set a callback for logging agent actions"""
+        self.log_callback = callback
+
+    def log(self, message: str):
+        """Log a message using callback or print"""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message, flush=True)
 
     def _register_tools(self):
         """Define the 'Hands' of the agent"""
@@ -70,8 +85,11 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         @self.agent.tool
         async def list_files(ctx: RunContext[AgentDeps], path: str = ".") -> str:
             """List files and directories in a path"""
+            self.log(f"📂 Agent is listing files in: {path}")
             full_path = os.path.join(ctx.deps.base_path, path)
             try:
+                if not os.path.exists(full_path):
+                    return "Directory does not exist."
                 items = os.listdir(full_path)
                 return "\n".join(items) if items else "Directory is empty"
             except Exception as e:
@@ -80,6 +98,7 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         @self.agent.tool
         async def read_file(ctx: RunContext[AgentDeps], filename: str) -> str:
             """Read the content of a file"""
+            self.log(f"📖 Agent is reading file: {filename}")
             full_path = os.path.join(ctx.deps.base_path, filename)
             try:
                 with open(full_path, 'r') as f:
@@ -90,6 +109,7 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         @self.agent.tool
         async def make_directory(ctx: RunContext[AgentDeps], path: str) -> str:
             """Create a directory (and any parent directories)"""
+            self.log(f"📂 Agent is creating directory: {path}")
             full_path = os.path.join(ctx.deps.base_path, path)
             try:
                 os.makedirs(full_path, exist_ok=True)
@@ -100,6 +120,7 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         @self.agent.tool
         async def write_file(ctx: RunContext[AgentDeps], filename: str, content: str) -> str:
             """Write content to a file (creates parent directories if needed)"""
+            self.log(f"✍️  Agent is writing file: {filename}")
             full_path = os.path.join(ctx.deps.base_path, filename)
             try:
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -112,38 +133,60 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
         @self.agent.tool
         async def search_files(ctx: RunContext[AgentDeps], pattern: str, path: str = ".") -> str:
             """Search for a pattern (grep) in the workspace"""
+            self.log(f"🔍 Agent is searching for '{pattern}' in {path}")
             full_path = os.path.join(ctx.deps.base_path, path)
             try:
-                # Use grep -r for searching
-                result = subprocess.run(
-                    ["grep", "-r", pattern, "."],
+                # Use grep -r for searching, async
+                process = await asyncio.create_subprocess_exec(
+                    "grep", "-r", pattern, ".",
                     cwd=full_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=10
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                return result.stdout if result.stdout else "No matches found."
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+                output = stdout.decode()
+                return output if output else "No matches found."
+            except asyncio.TimeoutError:
+                return "Search timed out."
             except Exception as e:
                 return f"Search failed: {str(e)}"
 
         @self.agent.tool
         async def execute_command(ctx: RunContext[AgentDeps], command: str) -> str:
             """Execute a shell command in the app directory and return output"""
+            self.log(f"💻 Agent is executing command: {command}")
             try:
-                # Use shlex to handle command and avoid injection issues? 
-                # Actually, we want the agent to be powerful.
-                result = subprocess.run(
+                # Use asyncio for non-blocking execution
+                process = await asyncio.create_subprocess_shell(
                     command,
-                    shell=True,
                     cwd=ctx.deps.base_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=30
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                output = f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+                
+                output = f"STDOUT:\n{stdout.decode()}\nSTDERR:\n{stderr.decode()}"
                 return output
+            except asyncio.TimeoutError:
+                return "Command execution timed out after 30 seconds."
             except Exception as e:
                 return f"Command execution failed: {str(e)}"
+
+    async def get_suggested_name(self, prompt: str) -> str:
+        """Ask the LLM for a suitable one-word folder name for the app"""
+        self.log("🤖 Agent is suggesting an app name...")
+        # Use a fresh context for this small task to avoid cluttering history
+        try:
+            # We use the internal agent to generate a name
+            result = await self.agent.run(
+                f"Based on this user request: '{prompt}', suggest a single, concise, lowercase alphanumeric word to use as a folder name for this project. Output ONLY the word, no punctuation or explanation.",
+                deps=AgentDeps(base_path=".")
+            )
+            name = str(getattr(result, 'data', result)).strip().lower().split()[0]
+            # Sanity check: ensure it's alphanumeric
+            return "".join(c for c in name if c.isalnum()) or "my_app"
+        except Exception:
+            return "my_app"
 
     async def run_task(self, prompt: str, app_path: str):
         """Run the agent on a specific task within an app directory"""

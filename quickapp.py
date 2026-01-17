@@ -7,6 +7,7 @@ Main CLI application
 import asyncio
 import os
 import sys
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -34,6 +35,8 @@ class QuickAppCLI:
         # Initialize components
         self.agent: CodeGenAgent | None = None
         self.running = True
+        self.current_app_dir: str | None = None
+
     
     def initialize_agent(self):
         """Initialize the AI agent"""
@@ -45,7 +48,7 @@ class QuickAppCLI:
                 print_info("  export MISTRAL_API_KEY='your-key-here'")
                 sys.exit(1)
             
-            model = os.getenv("MISTRAL_MODEL", "mistral-large-latest")
+            model = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
             self.agent = CodeGenAgent(api_key=api_key, model=model)
             
             print_success(f"Initialized agent with model: {model}")
@@ -53,21 +56,48 @@ class QuickAppCLI:
         except Exception as e:
             print_error(f"Failed to initialize agent: {e}")
             sys.exit(1)
+
+        # Check for uv
+        if shutil.which("uv") is None:
+            print_error("❌ 'uv' is not installed or not in PATH.")
+            print_info("Please install uv: https://docs.astral.sh/uv/getting-started/installation/")
+            sys.exit(1)
     
     async def process_prompt(self, prompt: str):
         """Process user prompt and generate app"""
-        # 1. Prepare directory
-        app_name = prompt.lower().split()[0] # Crude way to get a name if not specified
-        app_dir = os.path.join("apps", app_name)
-        os.makedirs(app_dir, exist_ok=True)
+        # 1. Determine app directory
+        if not self.current_app_dir:
+            # Let the LLM decide the name
+            candidate_name = await self.agent.get_suggested_name(prompt)
+            
+            print_info(f"🆕 Starting new app: {candidate_name}")
+            self.current_app_dir = os.path.join("apps", candidate_name)
+            os.makedirs(self.current_app_dir, exist_ok=True)
+        else:
+            print_info(f"🔄 updating app in: {self.current_app_dir}")
         
-        spinner = Spinner("Agent is building your app autonomously")
+        # Remove spinner, let the agent print its actions
+        spinner = Spinner("Agent is thinking")
         
+        def handle_agent_log(msg: str):
+            """Handle logs from the agent by pausing spinner"""
+            if spinner.running:
+                spinner.stop()
+                print_info(msg)
+                spinner.start()
+            else:
+                print_info(msg)
+
         try:
+            # print_info("🧠 Agent is thinking...")
             spinner.start()
+            # print_separator()
+            
+            # Configure agent logging
+            self.agent.set_log_callback(handle_agent_log)
             
             # Run the autonomous agent
-            result = await self.agent.run_task(prompt, app_dir)
+            result = await self.agent.run_task(prompt, self.current_app_dir)
             
             spinner.stop()
             print_success("Agent finished the task")
@@ -77,10 +107,11 @@ class QuickAppCLI:
             
             # Show how to run it
             print_separator()
-            print_info(f"App built at: {app_dir}")
-            print(f"\n  cd {app_dir}")
-            print(f"  uv run uvicorn main:app --reload")
-            print(f"\n  Then open: http://localhost:8000\n")
+            print_info(f"App location: {self.current_app_dir}")
+            print_info("To run the app:")
+            print_success(f"cd {self.current_app_dir}")
+            print_success("uv run uvicorn main:app --reload")
+            
             print_separator()
             
             # Show context usage
@@ -111,6 +142,12 @@ class QuickAppCLI:
             self.agent.clear_history()
             print_success("Conversation history cleared")
             return True
+
+        if command == 'new':
+            self.current_app_dir = None
+            self.agent.clear_history()
+            print_success("Started a new session. Next prompt will create a new app.")
+            return True
         
         if command == 'help':
             self.show_help()
@@ -127,6 +164,7 @@ class QuickAppCLI:
         print_separator()
         print("\n📖 QuickApp Commands:\n")
         print("  [prompt]  - Describe the app you want to create")
+        print("  new       - Start a new app (reset context)")
         print("  clear     - Clear conversation history")
         print("  status    - Show current context usage")
         print("  help      - Show this help message")
@@ -184,8 +222,7 @@ class QuickAppCLI:
                 print_error(f"Unexpected error: {e}")
                 import traceback
                 traceback.print_exc()
-
-
+        
 def main():
     """Entry point"""
     cli = QuickAppCLI()
