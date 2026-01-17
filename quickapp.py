@@ -21,6 +21,7 @@ from ui import (
     print_error,
     print_info,
     print_warning,
+    print_thought,
     get_user_input,
 )
 
@@ -28,14 +29,23 @@ from ui import (
 class QuickAppCLI:
     """Main CLI application"""
     
-    def __init__(self):
+    def __init__(self, initial_app: str | None = None):
         # Load environment variables
         load_dotenv()
         
         # Initialize components
         self.agent: CodeGenAgent | None = None
         self.running = True
-        self.current_app_dir: str | None = None
+        self.current_app_dir = initial_app
+        
+        if self.current_app_dir:
+            # Normalize path
+            if not os.path.isabs(self.current_app_dir) and not self.current_app_dir.startswith("apps/"):
+                # If just a name is given, assume it's in apps/
+                self.current_app_dir = os.path.join("apps", self.current_app_dir)
+            
+            if not os.path.exists(self.current_app_dir):
+                print_warning(f"Note: Path {self.current_app_dir} does not exist yet. It will be created on first prompt.")
 
     
     def initialize_agent(self):
@@ -102,8 +112,19 @@ class QuickAppCLI:
             spinner.stop()
             print_success("Agent finished the task")
             
+            # Parse and display thoughts
+            import re
+            thought_match = re.search(r'<thought>(.*?)</thought>', str(result), re.DOTALL)
+            if thought_match:
+                thought = thought_match.group(1).strip()
+                print_thought(thought)
+                # Remove thought from final message
+                result_clean = re.sub(r'<thought>.*?</thought>', '', str(result), flags=re.DOTALL).strip()
+            else:
+                result_clean = str(result).strip()
+
             print_info("Agent Message:")
-            print(f"\n{result}\n")
+            print(f"\n{result_clean}\n")
             
             # Show how to run it
             print_separator()
@@ -157,18 +178,29 @@ class QuickAppCLI:
             self.show_status()
             return True
         
+        if command.startswith('open '):
+            path = user_input[5:].strip()
+            if not os.path.isabs(path) and not path.startswith("apps/"):
+                path = os.path.join("apps", path)
+            
+            self.current_app_dir = path
+            os.makedirs(self.current_app_dir, exist_ok=True)
+            print_success(f"Context switched to: {self.current_app_dir}")
+            return True
+        
         return False
     
     def show_help(self):
         """Show help message"""
         print_separator()
         print("\n📖 QuickApp Commands:\n")
-        print("  [prompt]  - Describe the app you want to create")
-        print("  new       - Start a new app (reset context)")
-        print("  clear     - Clear conversation history")
-        print("  status    - Show current context usage")
-        print("  help      - Show this help message")
-        print("  exit/quit - Exit QuickApp")
+        print("  [prompt]    - Describe the app you want to create")
+        print("  open [name] - Switch to an existing app in apps/")
+        print("  new         - Start a new app (reset context)")
+        print("  clear       - Clear conversation history")
+        print("  status      - Show current context usage")
+        print("  help        - Show this help message")
+        print("  exit/quit   - Exit QuickApp")
         print()
         print_separator()
     
@@ -179,6 +211,7 @@ class QuickAppCLI:
         
         print_separator()
         print(f"\n📊 Status:")
+        print(f"  Current App: {self.current_app_dir or 'None'}")
         print(f"  Messages in history: {message_count}")
         print_context_usage(current, max_tokens)
         print_separator()
@@ -190,6 +223,9 @@ class QuickAppCLI:
         print_info("Initializing QuickApp...")
         self.initialize_agent()
         
+        if self.current_app_dir:
+            print_info(f"📁 Resuming work in: {self.current_app_dir}")
+
         print_separator()
         print("\n💡 Tip: Describe the web app you want to create")
         print("   Example: 'Create a to-do list app'")
@@ -225,7 +261,12 @@ class QuickAppCLI:
         
 def main():
     """Entry point"""
-    cli = QuickAppCLI()
+    import argparse
+    parser = argparse.ArgumentParser(description="QuickApp CLI")
+    parser.add_argument("app_path", nargs="?", help="Optional path to an existing app directory")
+    args = parser.parse_args()
+
+    cli = QuickAppCLI(initial_app=args.app_path)
     asyncio.run(cli.run())
 
 

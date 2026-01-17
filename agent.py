@@ -5,6 +5,7 @@ Core autonomous agent using PydanticAI tools for filesystem interaction.
 import os
 import asyncio
 import subprocess
+import uuid
 from typing import Optional
 from dataclasses import dataclass
 from pydantic_ai import Agent, RunContext
@@ -21,6 +22,9 @@ class CodeGenAgent:
     
     SYSTEM_PROMPT = """You are an autonomous web developer. 
 Your goal is to build a functional, beautiful Web Application (not just a JSON API) in the provided directory.
+
+THOUGHT PROCESS:
+Start your response with a concise thinking process wrapped in <thought> tags (e.g., <thought>I need to create the database schema first.</thought>). This helps the user understand your reasoning.
 
 WORKFLOW:
 1. EXPLORE: Check the directory. If files exist, you are MODIFYING an existing app. Do not overwrite unless asked.
@@ -175,18 +179,38 @@ If you encounter an error (e.g., 'Address already in use'), ignore it and focus 
     async def get_suggested_name(self, prompt: str) -> str:
         """Ask the LLM for a suitable one-word folder name for the app"""
         self.log("🤖 Agent is suggesting an app name...")
-        # Use a fresh context for this small task to avoid cluttering history
+        
+        # Prepare a suffix
+        suffix = uuid.uuid4().hex[:3]
+        
         try:
             # We use the internal agent to generate a name
             result = await self.agent.run(
-                f"Based on this user request: '{prompt}', suggest a single, concise, lowercase alphanumeric word to use as a folder name for this project. Output ONLY the word, no punctuation or explanation.",
+                f"Suggest a single, concise, lowercase alphanumeric word (e.g. 'todo', 'inventory', 'finance') to use as a folder name for this request: '{prompt}'. Output ONLY the word, no punctuation or explanation.",
                 deps=AgentDeps(base_path=".")
             )
-            name = str(getattr(result, 'data', result)).strip().lower().split()[0]
-            # Sanity check: ensure it's alphanumeric
-            return "".join(c for c in name if c.isalnum()) or "my_app"
-        except Exception:
-            return "my_app"
+            
+            # Safe attribute access for different PydanticAI versions/result types
+            raw_output = str(getattr(result, 'data', getattr(result, 'output', result))).strip()
+            self.log(f"📝 Raw naming response: {raw_output}")
+            
+            # 1. Strip out thought tags if they exist
+            import re
+            clean_output = re.sub(r'<thought>.*?</thought>', '', raw_output, flags=re.DOTALL).strip().lower()
+            
+            # 2. Extract just the first word in case it gave an explanation
+            first_word = clean_output.split()[0] if clean_output else ""
+            
+            # 3. Clean to only alphanumeric
+            clean_name = "".join(c for c in first_word if c.isalnum())
+            
+            # Combine with our suffix
+            final_name = f"{clean_name}_{suffix}" if clean_name else f"app_{suffix}"
+            return final_name
+            
+        except Exception as e:
+            self.log(f"⚠️ Naming failed: {e}")
+            return f"app_{suffix}"
 
     async def run_task(self, prompt: str, app_path: str):
         """Run the agent on a specific task within an app directory"""

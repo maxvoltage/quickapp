@@ -64,9 +64,7 @@ def print_header():
 def print_context_usage(current_tokens: int, max_tokens: int):
     """Print context window usage"""
     percentage = (current_tokens / max_tokens) * 100
-    bar_length = 30
-    filled = int((current_tokens / max_tokens) * bar_length)
-    bar = '█' * filled + '░' * (bar_length - filled)
+    display_percentage = min(percentage, 100.0)
     
     # Color coding based on usage
     if percentage < 50:
@@ -78,7 +76,7 @@ def print_context_usage(current_tokens: int, max_tokens: int):
     
     reset = '\033[0m'
     
-    print(f"\n{color}Context: [{bar}] {current_tokens:,}/{max_tokens:,} tokens ({percentage:.1f}%){reset}")
+    print(f"\n{color}Usage: {current_tokens:,} / {max_tokens:,} tokens ({display_percentage:.1f}%){reset}")
 
 
 def print_separator():
@@ -104,6 +102,11 @@ def print_info(message: str):
 def print_warning(message: str):
     """Print warning message in yellow"""
     print(f"\033[93m⚠ {message}\033[0m")
+
+
+def print_thought(text: str):
+    """Print model's thought process in a dimmed style"""
+    print(f"\n\033[2m💭 {text}\033[0m")
 
 
 def get_user_input(prompt: str = "You") -> str:
